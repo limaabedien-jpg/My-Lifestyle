@@ -1,0 +1,48 @@
+// My Lifestyle — "Today's tasks" widget page (its own home-screen icon): today's list, what's on now and next
+import * as api from "./api.js";
+
+const W = document.getElementById("w");
+const el = (tag, attrs = {}, ...kids) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) { if (k === "style") Object.entries(v).forEach(([a, b]) => a.startsWith("--") ? e.style.setProperty(a, b) : (e.style[a] = b)); else if (k === "class") e.className = v; else e.setAttribute(k, v); } kids.flat().forEach(k => k != null && e.append(k)); return e; };
+const APP = api.SITE_URL + "#/today";
+const dhaka = () => new Date(Date.now() + (6 * 60 + new Date().getTimezoneOffset()) * 60000);
+const pad = n => String(n).padStart(2, "0");
+const today = () => { const d = dhaka(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+const tm = iso => new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "Asia/Dhaka" });
+const left = ms => { const m = Math.max(1, Math.round(ms / 60000)); return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`; };
+const DONE = ["completed", "late_completed"], BAD = ["missed", "not_completed", "failed"];
+
+let ensured = "";
+async function draw() {
+  if (!api.getSession()) { W.replaceChildren(el("p", { class: "empty" }, "Log in to My Lifestyle first."), el("a", { class: "open", href: api.SITE_URL + "#/login" }, "Open the app")); return; }
+  const day = today();
+  let tasks;
+  try {
+    if (ensured !== day) { await api.rpc("ensure_tasks", { p_from: day, p_to: day }).catch(() => {}); ensured = day; }
+    tasks = (await api.select("tasks", `select=id,title,category,color,start_at,end_at,status,is_timer&day=eq.${day}&order=start_at`)).filter(t => !t.is_timer);
+    api.LS.set("al_widget", { day, tasks });
+  } catch { const c = api.LS.get("al_widget"); tasks = c?.day === day ? c.tasks : []; }
+  const now = Date.now();
+  const done = tasks.filter(t => DONE.includes(t.status)).length;
+  const cur = tasks.find(t => t.status === "pending" && new Date(t.start_at) <= now && new Date(t.end_at) > now);
+  const next = tasks.find(t => t.status === "pending" && new Date(t.start_at) > now);
+  const color = t => t.color || "#2DD4BF";
+  const big = (t, label, extra) => el("a", { class: "big" + (label === "Now" ? " now" : ""), href: APP, style: { "--c": color(t) } }, el("small", {}, label), el("b", {}, t.title), el("span", { class: "sub" }, extra));
+  W.replaceChildren(
+    el("header", {}, el("div", {}, el("h1", {}, "Today's tasks"), el("div", { class: "sub" }, dhaka().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "short" }) + ` · ${done}/${tasks.length} done`)),
+      el("button", { class: "ref", "aria-label": "Refresh" }, "↻")),
+    el("div", { class: "bar" }, el("i", { style: { width: (tasks.length ? Math.round(100 * done / tasks.length) : 0) + "%" } })),
+    cur ? big(cur, "Now", `${tm(cur.start_at)} – ${tm(cur.end_at)} · ${left(new Date(cur.end_at) - now)} left`) : null,
+    next ? big(next, "Next", `${tm(next.start_at)} · in ${left(new Date(next.start_at) - now)}`) : null,
+    tasks.length ? el("div", { class: "list" }, tasks.map(t => {
+      const live = t === cur, ok = DONE.includes(t.status), bad = BAD.includes(t.status);
+      return el("a", { class: "row" + (ok ? " done" : ""), href: APP, style: { "--c": color(t) } },
+        el("span", { class: "t" }, tm(t.start_at)), el("i", { class: "dot" }), el("span", { class: "name" }, t.title),
+        el("span", { class: "st" + (ok ? " ok" : bad ? " bad" : live ? " live" : "") }, ok ? "✓" : bad ? "✕" : live ? "●" : ""));
+    })) : el("p", { class: "empty" }, "No tasks today. Set your routine in the app."),
+    el("a", { class: "open", href: APP }, "Open My Lifestyle"));
+  W.querySelector(".ref").onclick = () => draw();
+}
+draw();
+setInterval(() => { if (!document.hidden) draw(); }, 60000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) draw(); });
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("../sw.js", { updateViaCache: "none" }).catch(() => {});
